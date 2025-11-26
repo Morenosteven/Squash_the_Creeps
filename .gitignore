@@ -1,0 +1,13 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+/ios/
+*.tmp
+
+# Imported translations (if applicable)
+*.translation
+
+# Mono-specific (if you use C#, ignore if using GDScript)
+.mono/
+data_*/
+mono_crash.*.json
