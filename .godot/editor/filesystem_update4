@@ -1,0 +1,6 @@
+res://main.tscn
+res://Mob.tscn
+res://ui_theme.tres
+res://Main.gd
+res://Player.gd
+res://PowerUp.gd

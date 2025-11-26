@@ -1,83 +1,144 @@
 extends CharacterBody3D
 
 signal hit
+signal health_changed(new_health)
+signal damage_taken
 
-# How fast the player moves in meters per second
+## How fast the player moves in meters per second.
 @export var speed = 14
-# The downward acceleration while in the air, in meters per second squared.
-@export var fall_acceleration = 75
-# Vertical impulse applied to the character upon jumping in meters per second.
+## Vertical impulse applied to the character upon jumping in meters per second.
 @export var jump_impulse = 20
-# Vertical impulse applied to the character upon bouncing over a mob
-# in meters per second.
+## Vertical impulse applied to the character upon bouncing over a mob in meters per second.
 @export var bounce_impulse = 16
+## The downward acceleration when in the air, in meters per second.
+@export var fall_acceleration = 75
 
-var target_velocity = Vector3.ZERO
+# Sistema de vida
+var max_health = 3
+var current_health = 3
+var is_invulnerable = false
+var invulnerability_duration = 1.0  # 1 segundo de invencibilidad
+
+# Sistema de Power-Ups
+var has_shield = false
+var can_double_jump = false
+var has_double_jumped = false
 
 
 func _physics_process(delta):
-	# We create a local variable to store the input direction
 	var direction = Vector3.ZERO
+	if Input.is_action_pressed(&"move_right"):
+		direction.x += 1
+	if Input.is_action_pressed(&"move_left"):
+		direction.x -= 1
+	if Input.is_action_pressed(&"move_back"):
+		direction.z += 1
+	if Input.is_action_pressed(&"move_forward"):
+		direction.z -= 1
 
-	# We check for each move input and update the direction accordingly
-	if Input.is_action_pressed("move_right"):
-		direction.x = direction.x + 1
-	if Input.is_action_pressed("move_left"):
-		direction.x = direction.x - 1
-	if Input.is_action_pressed("move_back"):
-		# Notice how we are working with the vector's x and z axes.
-		# In 3D, the XZ plane is the ground plane.
-		direction.z = direction.z + 1
-	if Input.is_action_pressed("move_forward"):
-		direction.z = direction.z - 1
-
-	# Prevent diagonal moving fast af
 	if direction != Vector3.ZERO:
+		# In the lines below, we turn the character when moving and make the animation play faster.
 		direction = direction.normalized()
 		# Setting the basis property will affect the rotation of the node.
-		$Pivot.basis = Basis.looking_at(direction)
-
-	# Ground Velocity
-	target_velocity.x = direction.x * speed
-	target_velocity.z = direction.z * speed
-
-	# Vertical Velocity
-	if not is_on_floor(): # If in the air, fall towards the floor. Literally gravity
-		target_velocity.y = target_velocity.y - (fall_acceleration * delta)
+		basis = Basis.looking_at(direction)
+		$AnimationPlayer.speed_scale = 4
+		velocity.x = direction.x * speed
+		velocity.z = direction.z * speed
+	else:
+		$AnimationPlayer.speed_scale = 1
+		velocity.x = 0
+		velocity.z = 0
 
 	# Jumping.
-	if is_on_floor() and Input.is_action_just_pressed("jump"):
-		target_velocity.y = jump_impulse
+	if is_on_floor():
+		has_double_jumped = false
+		if Input.is_action_just_pressed(&"jump"):
+			velocity.y = jump_impulse
+	elif can_double_jump and !has_double_jumped and Input.is_action_just_pressed(&"jump"):
+		velocity.y = jump_impulse
+		has_double_jumped = true
+		print("🚀 ¡Doble salto!")
 
-	# Iterate through all collisions that occurred this frame
-	# in C this would be for(int i = 0; i < collisions.Count; i++)
-	for index in range(get_slide_collision_count()):
-		# We get one of the collisions with the player
-		var collision = get_slide_collision(index)
-
-		# If the collision is with ground
-		if collision.get_collider() == null:
-			continue
-
-		# If the collider is with a mob
-		if collision.get_collider().is_in_group("mob"):
-			var mob = collision.get_collider()
-			# we check that we are hitting it from above.
-			if Vector3.UP.dot(collision.get_normal()) > 0.1:
-				# If so, we squash it and bounce.
-				mob.squash()
-				target_velocity.y = bounce_impulse
-				# Prevent further duplicate calls.
-				break
-
-	# Moving the Character
-	velocity = target_velocity
+	# We apply gravity every frame so the character always collides with the ground when moving.
+	# This is necessary for the is_on_floor() function to work as a body can always detect
+	# the floor, walls, etc. when a collision happens the same frame.
+	velocity.y -= fall_acceleration * delta
 	move_and_slide()
 
-# And this function at the bottom.
+	# Here, we check if we landed on top of a mob and if so, we kill it and bounce.
+	# With move_and_slide(), Godot makes the body move sometimes multiple times in a row to
+	# smooth out the character's motion. So we have to loop over all collisions that may have
+	# happened.
+	# If there are no "slides" this frame, the loop below won't run.
+	for index in range(get_slide_collision_count()):
+		var collision = get_slide_collision(index)
+		if collision.get_collider().is_in_group(&"mob"):
+			var mob = collision.get_collider()
+			if Vector3.UP.dot(collision.get_normal()) > 0.1:
+				mob.squash()
+				velocity.y = bounce_impulse
+				# Prevent this block from running more than once,
+				# which would award the player more than 1 point for squashing a single mob.
+				break
+
+	# This makes the character follow a nice arc when jumping
+	rotation.x = PI / 6 * velocity.y / jump_impulse
+
+
 func die():
 	hit.emit()
 	queue_free()
 
-func _on_mob_detector_body_entered(body):
-	die()
+
+func take_damage():
+	if is_invulnerable:
+		return  # No recibir daño si está en invencibilidad
+	
+	if has_shield:
+		print("🛡️ ¡Escudo absorbió el daño!")
+		return
+	
+	current_health -= 1
+	health_changed.emit(current_health)
+	damage_taken.emit()  # Emitir señal para screen shake
+	print("💔 Vida: ", current_health, "/", max_health)
+	
+	# Activar invencibilidad temporal
+	is_invulnerable = true
+	print("✨ Invencibilidad activada por ", invulnerability_duration, " segundo")
+	await get_tree().create_timer(invulnerability_duration).timeout
+	is_invulnerable = false
+	print("✨ Invencibilidad desactivada")
+	
+	if current_health <= 0:
+		die()
+
+
+func _on_MobDetector_body_entered(_body):
+	take_damage()
+
+
+func activate_double_jump():
+	can_double_jump = true
+	print("🔵 ¡Doble Salto activado por 10 segundos!")
+	await get_tree().create_timer(10.0).timeout
+	can_double_jump = false
+	has_double_jumped = false
+	print("🔵 Doble Salto desactivado")
+
+
+func activate_shield():
+	has_shield = true
+	print("🟡 ¡Inmunidad activada por 5 segundos!")
+	await get_tree().create_timer(5.0).timeout
+	has_shield = false
+	print("🟡 Inmunidad desactivada")
+
+
+func heal():
+	if current_health < max_health:
+		current_health += 1
+		health_changed.emit(current_health)
+		print("🔴 ¡Vida restaurada! Vida: ", current_health, "/", max_health)
+	else:
+		print("🔴 Vida ya está al máximo")
